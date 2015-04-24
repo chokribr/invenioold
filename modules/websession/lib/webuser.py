@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 ##
 ## This file is part of Invenio.
-## Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 CERN.
+## Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2014 CERN.
 ##
 ## Invenio is free software; you can redistribute it and/or
 ## modify it under the terms of the GNU General Public License as
@@ -39,8 +39,10 @@ import smtplib
 import re
 import random
 import datetime
-
 from socket import gaierror
+import os
+import binascii
+import time
 
 from invenio.config import \
      CFG_ACCESS_CONTROL_LEVEL_ACCOUNTS, \
@@ -167,6 +169,9 @@ def page_not_authorized(req, referer='', uid='', text='', navtrail='', ln=CFG_SI
                 navtrail=navtrail,
                 req=req,
                 navmenuid=navmenuid)
+
+
+
 
 def getUid(req):
     """Return user ID taking it from the cookie of the request.
@@ -914,8 +919,19 @@ def get_nickname_or_email(uid):
 
 def create_userinfobox_body(req, uid, language="en"):
     """Create user info box body for user UID in language LANGUAGE."""
-
+    
     if req:
+        # attempt: the number of login attempt
+        attempt = 0
+        
+        args = req.get_args()
+     # extract the attempt argument if exist
+        if  str.find(args,'attempt=')>-1:
+            attempt = int (float(args[str.index(args,'attempt=')+8]))
+            
+            
+           
+        
         if req.is_https():
             url_referer = CFG_SITE_SECURE_URL + req.unparsed_uri
         else:
@@ -926,7 +942,7 @@ def create_userinfobox_body(req, uid, language="en"):
         url_referer = CFG_SITE_URL
 
     user_info = collect_user_info(req)
-
+     
     try:
         return tmpl.tmpl_create_userinfobox(ln=language,
                                             url_referer=url_referer,
@@ -940,7 +956,8 @@ def create_userinfobox_body(req, uid, language="en"):
                                             usealerts=user_info['precached_usealerts'],
                                             usegroups=user_info['precached_usegroups'],
                                             useloans=user_info['precached_useloans'],
-                                            usestats=user_info['precached_usestats']
+                                            usestats=user_info['precached_usestats'],
+                                            attempt=attempt
                                             )
     except OperationalError:
         return ""
@@ -1404,3 +1421,76 @@ def collect_user_info(req, login_time=False, refresh=False):
     except Exception, e:
         register_exception()
     return user_info
+
+
+def generate_csrf_token(req):
+    """Generate a new CSRF token and store it in the user session.
+
+    Generate random CSRF token for the current user and store it in
+    the current session.  Also, store the time stamp when it was
+    generated.
+
+    Return tuple (csrf_token, csrf_token_time).
+
+    """
+    csrf_token = binascii.hexlify(os.urandom(32))
+    csrf_token_time = time.time()
+    session_param_set(req, 'csrf_token', csrf_token)
+    session_param_set(req, 'csrf_token_time', csrf_token_time)
+    return (csrf_token, csrf_token_time)
+
+
+def regenerate_csrf_token_if_needed(req, token_expiry=300):
+    """Regenerate CSRF token, if necessary, and store it in session.
+
+    Check whether user session has stored CSRF token, and whether it
+    is still not expired, i.e. whether not more than `token_expiry`
+    seconds elapsed since current session's CSRF token was created.
+    If not, then create new one.
+
+    Return tuple (csrf_token, csrf_token_time).
+    """
+
+    csrf_token = session_param_get(req, 'csrf_token')
+    csrf_token_time = session_param_get(req, 'csrf_token_time')
+
+    if not csrf_token or not csrf_token_time:
+        csrf_token, csrf_token_time = generate_csrf_token(req)
+
+    if csrf_token_time + token_expiry < time.time():
+        csrf_token, csrf_token_time = generate_csrf_token(req)
+
+    return (csrf_token, csrf_token_time)
+
+
+def is_csrf_token_valid(req, token_value, token_expiry=300):
+    """Check whether CSRF token is still valid.
+
+    Take CSRF token value from current session and check whether it is
+    equal to the passed `token_value`.  Also, check whether it has not
+    expired yet, i.e. whether not more than `token_expiry` seconds
+    elapsed since current session's CSRF token was created.
+
+    Return True if everything is OK, False otherwise.
+    """
+
+    # retrieve CSRF token from session:
+    csrf_token = session_param_get(req, 'csrf_token')
+    if not csrf_token:
+        return False
+
+    # retrieve CSRF token's timestamp from session:
+    csrf_token_time = session_param_get(req, 'csrf_token_time')
+    if not csrf_token_time:
+        return False
+
+    # is session's CSRF token not yet expired?
+    if csrf_token_time + token_expiry < time.time():
+        return False
+
+    # is session's CSRF token equal to given value?
+    if not token_value or token_value != csrf_token:
+        return False
+
+    # OK, every test passed, we are good:
+    return True

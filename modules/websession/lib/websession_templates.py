@@ -18,6 +18,7 @@
 __revision__ = "$Id$"
 
 import urllib
+import urlparse
 import cgi
 
 from invenio.config import \
@@ -40,10 +41,13 @@ from invenio.access_control_config import CFG_EXTERNAL_AUTH_USING_SSO, \
         CFG_OAUTH1_PROVIDERS, CFG_OPENID_AUTHENTICATION, \
         CFG_OAUTH2_AUTHENTICATION, CFG_OAUTH1_AUTHENTICATION
 
-from invenio.urlutils import make_canonical_urlargd, create_url, create_html_link
+from invenio.urlutils import make_canonical_urlargd, create_url, create_html_link, wash_url_argument, get_title_of_page
 from invenio.htmlutils import escape_html, nmtoken_from_string
 from invenio.messages import gettext_set_language, language_list_long
-from invenio.websession_config import CFG_WEBSESSION_GROUP_JOIN_POLICY
+from invenio.websession_config import CFG_WEBSESSION_GROUP_JOIN_POLICY, \
+      CFG_WEBSESSION_USERGROUP_STATUS
+
+
 class Template:
     def tmpl_back_form(self, ln, message, url, link):
         """
@@ -104,7 +108,8 @@ class Template:
         }
         return out
 
-    def tmpl_user_api_key(self, ln=CFG_SITE_LANG, keys_info=None):
+
+    def tmpl_user_api_key(self, ln=CFG_SITE_LANG, keys_info=None, csrf_token=''):
         """
         Displays all the API key that the user owns the user
 
@@ -112,6 +117,7 @@ class Template:
 
           - 'ln' *string* - The language to display the interface in
           - 'key_info' *tuples* - Contains the tuples with the key data (id, desciption, status)
+          - 'csrf_token' *string* - The CSRF token to verify the form origin.
 
         """
 
@@ -137,6 +143,7 @@ class Template:
             out += """
                     <table>
                     """
+
             for key_info in keys_info:
                 out += """
                         <tr><td>%(key_description)s</td>
@@ -152,6 +159,7 @@ class Template:
                             <form method="post" action="%(sitesecureurl)s/youraccount/apikey" name="api_key_remove">
                                  <input type="hidden" name="key_id" value="%(key_id)s" />
                                 <code class="blocknote"><input class="formbutton" type="%(input_type)s" value="%(remove_key)s" /></code>
+                                <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
                             </form>
                         </td>
                         </tr>
@@ -162,6 +170,7 @@ class Template:
                               'index':  keys_info.index(key_info),
                               'key_label': _("API key"),
                               'remove_key' : _("Delete key"),
+                              'csrf_token': cgi.escape(csrf_token, True),
                               'sitesecureurl': CFG_SITE_SECURE_URL,
                               'input_type': ("submit", "hidden")[key_info[2] == CFG_WEB_API_KEY_STATUS['REVOKED']]
                               }
@@ -185,6 +194,7 @@ class Template:
                     <code class="blocknote"><input class="formbutton" type="submit" value="%(create_new_key_button)s" /></code>
                   </td></tr>
                 </table>
+                <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
                 </form>
         """ % {
                'create_new_key' : _("If you want to create a new API key, please enter a description for it"),
@@ -193,12 +203,13 @@ class Template:
                'note' : _("Note"),
                'new_key_description_note': _("The description should be something meaningful for you to recognize the API key"),
                'create_new_key_button' : _("Create new key"),
+               'csrf_token': cgi.escape(csrf_token, True),
                'sitesecureurl': CFG_SITE_SECURE_URL
                }
 
         return out
 
-    def tmpl_user_preferences(self, ln, email, email_disabled, password_disabled, nickname):
+    def tmpl_user_preferences(self, ln, email, email_disabled, password_disabled, nickname, csrf_token=''):
         """
         Displays a form for the user to change his email/password.
 
@@ -214,6 +225,7 @@ class Template:
 
           - 'nickname' *string* - The nickname of the user (empty string if user does not have it)
 
+          - 'csrf_token' *string* - The CSRF token to verify the form origin.
         """
 
         # load the right message language
@@ -249,12 +261,14 @@ class Template:
                   </td></tr>
                 </table>
                 <input type="hidden" name="action" value="edit" />
+                <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
                 </form>
             """ % {
                 'change_user' : _("If you want to change your email or set for the first time your nickname, please set new values in the form below."),
                 'edit_params' : _("Edit login credentials"),
                 'nickname_label' : _("Nickname"),
                 'nickname' : nickname,
+                'csrf_token': cgi.escape(csrf_token, True),
                 'nickname_prefix' : nickname=='' and '<input type="text" size="25" name="nickname" id="nickname" value=""' or '',
                 'nickname_suffix' : nickname=='' and '" /><br /><small><span class="quicknote">'+_("Example")+':</span><span class="example">johnd</span></small>' or '',
                 'new_email' : _("New email address"),
@@ -302,12 +316,14 @@ class Template:
                   </td></tr>
                 </table>
                 <input type="hidden" name="action" value="edit" />
+                <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
                 </form>
                 """ % {
                     'change_pass' : _("If you want to change your password, please enter the old one and set the new value in the form below."),
                     'mandatory' : _("mandatory"),
                     'old_password' : _("Old password"),
                     'new_password' : _("New password"),
+                    'csrf_token': cgi.escape(csrf_token, True),
                     'optional' : _("optional"),
                     'note' : _("Note"),
                     'password_note' : _("The password phrase may contain punctuation, spaces, etc."),
@@ -329,7 +345,7 @@ class Template:
         return out
 
 
-    def tmpl_user_bibcatalog_auth(self, bibcatalog_username="", bibcatalog_password="", ln=CFG_SITE_LANG):
+    def tmpl_user_bibcatalog_auth(self, bibcatalog_username="", bibcatalog_password="", ln=CFG_SITE_LANG, csrf_token=''):
         """template for setting username and pw for bibcatalog backend"""
         _ = gettext_set_language(ln)
         out = """
@@ -343,7 +359,9 @@ class Template:
                 <tr>
                   <td><input class="formbutton" type="submit" value="%(update_settings)s" /></td>
                 </tr>
-              </table></form>
+              </table>
+              <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
+            </form>
         """ % {
           'sitesecureurl' : CFG_SITE_SECURE_URL,
           'bibcatalog_username' : bibcatalog_username,
@@ -351,12 +369,13 @@ class Template:
           'edit_bibcatalog_settings' : _("Edit cataloging interface settings"),
           'username' :  _("Username"),
           'password' :  _("Password"),
-          'update_settings' : _('Update settings')
+          'update_settings' : _('Update settings'),
+          'csrf_token': cgi.escape(csrf_token, True),
         }
         return out
 
 
-    def tmpl_user_lang_edit(self, ln, preferred_lang):
+    def tmpl_user_lang_edit(self, ln, preferred_lang, csrf_token=''):
         _ = gettext_set_language(ln)
         out = """
             <form method="post" action="%(sitesecureurl)s/youraccount/change" name="edit_lang_settings">
@@ -375,13 +394,15 @@ class Template:
             }
         out += """</select></td><td valign="top"><strong><label for="lang">%(select_lang)s</label></strong></td></tr>
             <tr><td></td><td><input class="formbutton" type="submit" value="%(update_settings)s" /></td></tr>
-        </table></form>""" % {
+        </table><input type="hidden" name="csrf_token" value="%(csrf_token)s" /></form>""" % {
             'select_lang' : _('Select desired language of the web interface.'),
-            'update_settings' : _('Update settings')
+            'update_settings' : _('Update settings'),
+            'csrf_token': cgi.escape(csrf_token, True),
         }
         return out
 
-    def tmpl_user_profiling_settings(self, ln, enable_profiling):
+
+    def tmpl_user_profiling_settings(self, ln, enable_profiling, csrf_token=''):
         _ = gettext_set_language(ln)
         out = """
             <form method="post" action="%(sitesecureurl)s/youraccount/change" name="edit_profiling_settings">
@@ -402,12 +423,14 @@ class Template:
         }
         out += """</select></td><td valign="top"></td></tr>
             <tr><td></td><td><input class="formbutton" type="submit" value="%(update_settings)s" /></td></tr>
-        </table></form>""" % {
-            'update_settings' : _('Update settings')
+        </table><input type="hidden" name="csrf_token" value="%(csrf_token)s" /></form>""" % {
+            'update_settings' : _('Update settings'),
+            'csrf_token': cgi.escape(csrf_token, True),
         }
         return out
 
-    def tmpl_user_websearch_edit(self, ln, current = 10, show_latestbox = True, show_helpbox = True):
+
+    def tmpl_user_websearch_edit(self, ln, current = 10, show_latestbox = True, show_helpbox = True, csrf_token=''):
         _ = gettext_set_language(ln)
         out = """
             <form method="post" action="%(sitesecureurl)s/youraccount/change" name="edit_websearch_settings">
@@ -436,14 +459,16 @@ class Template:
         out += """</select></td><td valign="top"><strong><label for="group_records">%(select_group_records)s</label></strong></td></tr>
               <tr><td></td><td><input class="formbutton" type="submit" value="%(update_settings)s" /></td></tr>
               </table>
+              <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
             </form>""" % {
                 'update_settings' : _("Update settings"),
                 'select_group_records' : _("Number of search results per page"),
+                'csrf_token': cgi.escape(csrf_token, True),
             }
         return out
 
 
-    def tmpl_user_external_auth(self, ln, methods, current, method_disabled):
+    def tmpl_user_external_auth(self, ln, methods, current, method_disabled, csrf_token=''):
         """
         Displays a form for the user to change his authentication method.
 
@@ -456,6 +481,8 @@ class Template:
           - 'method_disabled' *boolean* - If the user has the right to change this
 
           - 'current' *string* - The currently selected method
+
+          - 'csrf_token' *string* - The CSRF token to verify the form origin.
         """
 
         # load the right message language
@@ -483,8 +510,10 @@ class Template:
         out += """  </td></tr>
                    <tr><td>&nbsp;</td>
                      <td><input class="formbutton" type="submit" value="%(select_method)s" /></td></tr></table>
+                    <input type="hidden" name="csrf_token" value="%(csrf_token)s" />
                     </form>""" % {
                      'select_method' : _("Select method"),
+                     'csrf_token': cgi.escape(csrf_token, True),
                    }
 
         return out
@@ -945,8 +974,8 @@ class Template:
                 {'x_url_open': '<a href="./login?ln=' + ln + '">',
                  'x_url_close': '</a>'}
         return out
-
-    def tmpl_login_form(self, ln, referer, internal, register_available, methods, selected_method, msg=None):
+#   chokri
+    def tmpl_login_form(self, ln, referer, internal, register_available, methods, selected_method, attempt, msg=None):
         """
         Displays a login form
 
@@ -965,6 +994,7 @@ class Template:
           - 'selected_method' *string* - The default authentication method
 
           - 'msg' *string* - The message to print before the form, if needed
+          -attempt  *number* - The number of login attempt
         """
 
         # load the right message language
@@ -994,7 +1024,7 @@ class Template:
         else:
             out += "<p>%s</p>" % msg
 
-        out += """<form method="post" action="%(CFG_SITE_SECURE_URL)s/youraccount/login">
+        out += """<form method="get" action="%(CFG_SITE_SECURE_URL)s/youraccount/login">
                   <table>
                """ % {'CFG_SITE_SECURE_URL': CFG_SITE_SECURE_URL}
         if len(methods) - CFG_OPENID_AUTHENTICATION - CFG_OAUTH2_AUTHENTICATION - CFG_OAUTH1_AUTHENTICATION > 1:
@@ -1024,6 +1054,7 @@ class Template:
                    <td align="right">
                      <input type="hidden" name="ln" value="%(ln)s" />
                      <input type="hidden" name="referer" value="%(referer)s" />
+                     <input type="hidden" name="attempt" value="%(attempt)s" />
                      <strong><label for="p_un">%(username)s:</label></strong>
                    </td>
                    <td><input type="text" size="25" name="p_un" id="p_un" value="" /></td>
@@ -1044,6 +1075,7 @@ class Template:
                        'password' : cgi.escape(_("Password")),
                        'remember_me' : cgi.escape(_("Remember login on this computer.")),
                        'login' : cgi.escape(_("login")),
+                       'attempt':attempt,
                        }
         if internal:
             out += """&nbsp;&nbsp;&nbsp;(<a href="./lost?ln=%(ln)s">%(lost_pass)s</a>)""" % {
@@ -1290,7 +1322,7 @@ class Template:
                     'x_url_close': '</a>'}
         return out
 
-    def tmpl_create_userinfobox(self, ln, url_referer, guest, username, submitter, referee, admin, usebaskets, usemessages, usealerts, usegroups, useloans, usestats):
+    def tmpl_create_userinfobox(self, ln, url_referer, guest, username, submitter, referee, admin, usebaskets, usemessages, usealerts, usegroups, useloans, usestats, attempt):
         """
         Displays the user block
 
@@ -1321,6 +1353,7 @@ class Template:
           - 'useloans' *boolean* - If loans are enabled for the user
 
           - 'usestats' *boolean* - If stats are enabled for the user
+          - 'attempt' *number* - the number of login attempt
 
         @note: with the update of CSS classes (cds.cds ->
             invenio.css), the variables useloans etc are not used in
@@ -1334,13 +1367,15 @@ class Template:
 
         out = """<img src="%s/img/user-icon-1-20x20.gif" border="0" alt=""/> """ % CFG_SITE_URL
         if guest:
+          
             out += """%(guest_msg)s ::
-                   <a class="userinfo" href="%(sitesecureurl)s/youraccount/login?ln=%(ln)s%(referer)s">%(login)s</a>""" % {
+                   <a class="userinfo" href="%(sitesecureurl)s/youraccount/login?ln=%(ln)s&attempt=%(attempt)s%(referer)s">%(login)s</a>""" % {
                      'sitesecureurl': CFG_SITE_SECURE_URL,
                      'ln' : ln,
                      'guest_msg' : _("guest"),
                      'referer' : url_referer and ('&amp;referer=%s' % urllib.quote(url_referer)) or '',
-                     'login' : _('login')
+                     'login' : _('login'),
+                     'attempt' : attempt,
                    }
         else:
             out += """
@@ -1580,11 +1615,12 @@ class Template:
                                 infos,
                                 admin_group_html,
                                 member_group_html,
+                                moderator_group_html,
                                 external_group_html = None,
                                 warnings=[],
                                 ln=CFG_SITE_LANG):
         """
-        Displays the 3 tables of groups: admin, member and external
+        Displays the 4 tables of groups: admin, member, moderator and external
 
         Parameters:
 
@@ -1595,6 +1631,9 @@ class Template:
 
           - 'member_group_html' *string* - HTML code for displaying all the groups
           the user is member of
+
+          - 'moderator_group_html' *string* - HTML code for displaying all the groups
+          the user is the moderator of
 
           - 'external_group_html' *string* - HTML code for displaying all the
           external groups the user is member of
@@ -1616,7 +1655,7 @@ class Template:
 <tr>
     <td><br /><a name='external_groups'></a>%s</td>
 </tr>
-</table>""" %(admin_group_html, member_group_html, external_group_html)
+</table>""" %(admin_group_html, moderator_group_html, member_group_html, external_group_html)
         else:
             group_text += """
 <table>
@@ -1624,9 +1663,12 @@ class Template:
     <td>%s</td>
 </tr>
 <tr>
+    <td>%s</td>
+</tr>
+<tr>
     <td><br />%s</td>
 </tr>
-</table>""" %(admin_group_html, member_group_html)
+</table>""" %(admin_group_html, moderator_group_html, member_group_html)
         return group_text
 
 
@@ -1827,6 +1869,83 @@ class Template:
 </table>
  """
         return group_text
+
+    def tmpl_display_moderator_groups(self, groups, ln=CFG_SITE_LANG):
+        """
+        Display the groups the user is moderator of.
+
+        Parameters:
+
+        - 'ln' *string* - The language to display the interface in
+        - 'groups' *list* - All the group the user is moderator of.
+        - 'infos' *list* - Display infos on top of moderator group table
+        """
+
+        _ = gettext_set_language(ln)
+        img_link = """
+        <a href="%(siteurl)s/yourgroups/%(action)s?grpID=%(grpID)s&amp;ln=%(ln)s">
+        <img src="%(siteurl)s/img/%(img)s" alt="%(text)s" style="border:0" width="25"
+        height="25" /><br /><small>%(text)s</small>
+        </a>"""
+
+
+        out = self.tmpl_group_table_title(img="/img/group_admin.png",
+                                          text=_("You are a moderator of the following groups:") )
+
+        out += """
+<table class="mailbox">
+  <thead class="mailboxheader">
+    <tr class="inboxheader">
+      <td>%s</td>
+      <td>%s</td>
+      <td style="width: 20px;" >&nbsp;</td>
+      <td style="width: 20px;">&nbsp;</td>
+    </tr>
+  </thead>
+  <tfoot>
+    <tr style="height:0px;">
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+  </tfoot>
+  <tbody class="mailboxbody">""" %(_("Group"), _("Description"))
+        if len(groups) == 0:
+            out += """
+    <tr class="mailboxrecord" style="height: 100px;">
+      <td colspan="4" style="text-align: center;">
+        <small>%s</small>
+      </td>
+    </tr>""" %(_("You are not a moderator of any groups."),)
+        for group_data in groups:
+            (grpID, name, description) = group_data
+            members_link = img_link % {'siteurl' : CFG_SITE_URL,
+                                       'grpID' : grpID,
+                                       'ln': ln,
+                                       'img':"webbasket_usergroup.png",
+                                       'text':_("Edit %s members") % '',
+                                       'action':"members"
+                                       }
+             
+            out += """
+    <tr class="mailboxrecord">
+      <td>%s</td>
+      <td>%s</td>
+      <td style="text-align: center;" >%s</td>
+    </tr>""" % (cgi.escape(name), cgi.escape(description), members_link)
+        out += """
+    <tr class="mailboxfooter">
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+ """
+        return out
+
 
     def tmpl_display_input_group_info(self,
                                       group_name,
@@ -2064,8 +2183,10 @@ class Template:
     def tmpl_display_manage_member(self,
                                    grpID,
                                    group_name,
+                                   user_status,
                                    members,
                                    pending_members,
+                                   moderator_members,
                                    infos=[],
                                    warnings=[],
                                    ln=CFG_SITE_LANG):
@@ -2076,8 +2197,10 @@ class Template:
         - 'ln' *string* - The language to display the interface in
         - 'grpID *int* - ID of the group
         - 'group_name' *string* - Name of the group
+        - 'user_status' *string* - Status of the user
         - 'members' *list* - List of the current members
         - 'pending_members' *list* - List of the waiting members
+        - 'moderator_members' *list* - List of the moderator members
         - 'infos' *tuple of 2 lists* - Message to inform user about his last action
         - 'warnings' *list* - Display warning if two group are selected
         """
@@ -2155,6 +2278,7 @@ class Template:
   </table>
  </td>
  </tr>
+ %(moderator_text)s
  <tr>
   <td>
   <table class="bskbasket" style="width: 400px">
@@ -2203,6 +2327,11 @@ class Template:
             <td style="padding: 0 5 10 5;">
             <input type="submit" name="remove_member" value="%s" class="nonsubmitbutton"/>
             </td>""" %  (member_list,_("Remove member"))
+            if user_status == CFG_WEBSESSION_USERGROUP_STATUS['ADMIN'] :
+                member_text += """<td style="padding: 0 5 10 5;">
+                <input type="submit" name="add_moderator" value="%s" class="nonsubmitbutton"/>
+                </td>""" % _("Add as moderator")
+            
         else :
             member_text = """<td style="padding: 0 5 10 5;" colspan="2">%s</td>""" % _("No members.")
         if pending_members :
@@ -2217,10 +2346,51 @@ class Template:
             </td>""" %  (pending_list,_("Accept member"), _("Reject member"))
         else :
             pending_text = """<td style="padding: 0 5 10 5;" colspan="2">%s</td>""" % _("No members awaiting approval.")
+        moderator_text = ""        
+        if user_status == CFG_WEBSESSION_USERGROUP_STATUS['ADMIN']:
+            moderator_text = """<tr>
+<table class="bskbasket" style="width: 400px">
+    <thead class="bskbasketheader">
+      <tr>
+        <td class="bskactions">
+          <img src="%s/img/iconpen.gif" />
+        </td>
+
+        <td class="bsktitle">
+          <b>%s</b><br />
+          &nbsp;
+        </td>
+      </tr>
+    </thead>
+    <tfoot>
+       <tr><td colspan="2"></td></tr>
+    </tfoot>
+    <tbody>
+      <tr>
+        <td colspan="2">
+          <table>
+            <tr>""" % (CFG_SITE_URL,self.tmpl_group_table_title(text= _("Current moderators")))
+            if moderator_members :
+                moderator_list = self.__create_select_menu("moderator_member_id", moderator_members, _("Please select:"))  
+                moderator_text += """            
+                <td colspan="2" style="padding: 0 5 10 5;"><td style="padding: 0 5 10 5;">%s</td>
+                <td style="padding: 0 5 10 5;">
+                <input type="submit" name="remove_moderator" value="%s" class="nonsubmitbutton"/>
+               </td>""" % (moderator_list,_("Remove moderator"))
+            else :
+                moderator_text += """<td style="padding: 0 5 10 5;" colspan="2">%s</td>""" % _("No moderators.")
+            moderator_text += """</tr>
+          </table>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</tr>"""
 
         header1 = self.tmpl_group_table_title(text=_("Current members"))
         header2 = self.tmpl_group_table_title(text=_("Members awaiting approval"))
         header3 = _("Invite new members")
+        
         write_a_message_url = create_url(
             "%s/yourmessages/write" % CFG_SITE_URL,
             {
@@ -2247,6 +2417,7 @@ Best regards.
         out %= {'title':_('Group: %s') % escape_html(group_name),
                 'member_text' : member_text,
                 'pending_text' :pending_text,
+		'moderator_text' :moderator_text,
                 'action':action,
                 'grpID':grpID,
                 'header1': header1,
@@ -2567,6 +2738,25 @@ Best regards.
         subject = _("Group %s has been deleted") % group_name
         url = CFG_SITE_URL + "/yourgroups/display?ln=" + ln
         body = _("Group %s has been deleted by its administrator.") % group_name
+        body += '<br />'
+        body += _("You can consult the list of %(x_url_open)syour groups%(x_url_close)s.") % {'x_url_open': '<a href="' + url + '">',
+                                                                                              'x_url_close': '</a>'}
+        body += '<br />'
+        return subject, body
+
+    def tmpl_moderator_msg(self,
+                        group_name,
+                        ln=CFG_SITE_LANG):
+        """
+        return message content when new moderator is added
+        - 'group_name' *string* - name of the group
+        - 'ln' *string* - The language to display the interface in
+        """
+        _ = gettext_set_language(ln)
+        subject = _("Group %s: You has been added as moderator") % (group_name)
+        body = _("Your are choosen as a moderator for the group %s .") % (group_name)
+        
+        url = CFG_SITE_URL + "/yourgroups/display?ln=" + ln
         body += '<br />'
         body += _("You can consult the list of %(x_url_open)syour groups%(x_url_close)s.") % {'x_url_open': '<a href="' + url + '">',
                                                                                               'x_url_close': '</a>'}
