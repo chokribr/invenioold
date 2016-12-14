@@ -121,6 +121,8 @@ class BibIndexFulltextTokenizer(BibIndexDefaultTokenizer):
                 else:
                     text = ""
                     if hasattr(bibdoc, "get_text"):
+                     #Textify doc before getting 
+                        bibdoc.extract_text()
                         text = bibdoc.get_text()
                     return self.tokenize_for_words_default(text)
             else:
